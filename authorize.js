@@ -3,6 +3,7 @@ const path = require('path');
 const process = require('process');
 const {authenticate} = require('@google-cloud/local-auth');
 const {google} = require('googleapis');
+const {OAuth2Client} = require('google-auth-library');
 
 // If modifying these scopes, delete token.json.
 const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
@@ -19,13 +20,41 @@ const CREDENTIALS_PATH = path.join(process.cwd(), 'credentials.json');
  */
 async function loadSavedCredentialsIfExist() {
   try {
-    const content = await fs.readFile(TOKEN_PATH);
-    const credentials = JSON.parse(content);
-    return google.auth.fromJSON(credentials);
+      const content = await fs.readFile(TOKEN_PATH);
+      const credentials = JSON.parse(content);
+      const client = new OAuth2Client(
+          credentials.client_id,
+          credentials.client_secret,
+          credentials.redirect_uris ? credentials.redirect_uris[0] : undefined
+      );
+
+      // Check if the token is expired
+      const now = (new Date()).getTime();
+      if (credentials.expiry_date && credentials.expiry_date <= now) {
+          if (credentials.refresh_token) {
+              client.setCredentials({
+                  refresh_token: credentials.refresh_token
+              });
+              const newTokens = await client.refreshAccessToken();
+              const newAccessToken = newTokens.credentials.access_token;
+              credentials.access_token = newAccessToken;
+              credentials.expiry_date = newTokens.credentials.expiry_date;
+              await fs.writeFile(TOKEN_PATH, JSON.stringify(credentials));
+              client.setCredentials(credentials);
+          } else {
+              throw new Error("Refresh token is not available");
+          }
+      } else {
+          client.setCredentials(credentials);
+      }
+
+      return client;
   } catch (err) {
-    return null;
+      console.error("Error loading credentials:", err);
+      return null;
   }
 }
+
 
 /**
  * Serializes credentials to a file compatible with GoogleAUth.fromJSON.
@@ -33,6 +62,7 @@ async function loadSavedCredentialsIfExist() {
  * @param {OAuth2Client} client
  * @return {Promise<void>}
  */
+
 async function saveCredentials(client) {
   const content = await fs.readFile(CREDENTIALS_PATH);
   const keys = JSON.parse(content);

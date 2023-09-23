@@ -7,8 +7,10 @@
 Module.register("MMM-GoogleCalendar", {
   // Define module defaults
   defaults: {
-    maximumEntries: 10, // Total Maximum Entries
+    maximumEntries: 250, // Total Maximum Entries
     maximumNumberOfDays: 365,
+    displayedEventLimit: 10,
+    pastDaysCount: 0,
     limitDays: 0, // Limit the number of days shown, 0 = no limit
     displaySymbol: true,
     defaultSymbol: "calendar", // Fontawesome Symbol see https://fontawesome.com/cheatsheet?from=io
@@ -21,7 +23,7 @@ Module.register("MMM-GoogleCalendar", {
     wrapLocationEvents: false,
     maxTitleLines: 3,
     maxEventTitleLines: 3,
-    fetchInterval: 5 * 60 * 1000, // Update every 5 minutes.
+    fetchInterval: 60 * 1000 * 10, // Update every 5 minutes.
     animationSpeed: 2000,
     fade: true,
     urgency: 7,
@@ -31,7 +33,7 @@ Module.register("MMM-GoogleCalendar", {
     fullDayEventDateFormat: "MMM Do",
     showEnd: false,
     getRelative: 6,
-    fadePoint: 0.25, // Start on 1/4th of the list.
+    fadePoint: 0.024, // Start on 1/4th of the list.
     hidePrivate: false,
     hideOngoing: false,
     hideTime: false,
@@ -52,11 +54,11 @@ Module.register("MMM-GoogleCalendar", {
     locationTitleReplace: {
       "street ": ""
     },
-    broadcastEvents: false,
+    broadcastEvents: true,
     excludedEvents: [],
     sliceMultiDayEvents: false,
     nextDaysRelative: false,
-	broadcastPastEvents: false,
+	  broadcastPastEvents: true,
   },
 
   requiresVersion: "2.1.0",
@@ -141,16 +143,26 @@ Module.register("MMM-GoogleCalendar", {
     }
 
     if (notification === "CALENDAR_EVENTS") {
+  
+      // Check if hasCalendarID is true
       if (this.hasCalendarID(payload.calendarID)) {
-        this.calendarData[payload.calendarID] = payload.events;
-        this.error = null;
-        this.loaded = true;
-
-        if (this.config.broadcastEvents) {
-          this.broadcastEvents();
-        }
+  
+          this.calendarData[payload.calendarID] = payload.events;
+          this.error = null;
+          this.loaded = true;
+  
+  
+          // Check if broadcastEvents is set to true
+          if (this.config.broadcastEvents) {
+              console.log("broadcastEvents is set to true.");
+              this.broadcastEvents();
+          } else {
+              console.log("broadcastEvents is NOT set to true.");
+          }
+      } else {
+          console.log("hasCalendarID check failed for:", payload.calendarID);
       }
-    } else if (notification === "CALENDAR_ERROR") {
+  } else if (notification === "CALENDAR_ERROR") {
       let error_message = this.translate(payload.error_type);
       this.error = this.translate("MODULE_CONFIG_ERROR", {
         MODULE_NAME: this.name,
@@ -210,6 +222,10 @@ Module.register("MMM-GoogleCalendar", {
     let lastSeenDate = "";
 
     events.forEach((event, index) => {
+      if (index >= ('--displayedEventLimit', this.config.displayedEventLimit)) {
+        return;
+    }
+    
       const dateAsString = moment(event.startDate).format(
         this.config.dateFormat
       );
@@ -522,6 +538,7 @@ Module.register("MMM-GoogleCalendar", {
     this.config.calendars.forEach((calendar) => {
       if (!calendar.calendarID) {
         Log.warn(this.name + ": Unable to fetch, no calendar ID found!");
+        console.log(this.name + ": Unable to fetch, no calendar ID found!");
         return;
       }
 
@@ -650,7 +667,12 @@ Module.register("MMM-GoogleCalendar", {
         event.today =
           event.startDate >= today &&
           event.startDate < today + 24 * 60 * 60 * 1000;
-        event.title = event.summary;
+          event.title = event.summary;
+          // Check event title and skip if matches any of the undesired titles
+          if (["Jason work", "Jenn work", "Day 1", "Day 2", "Day 3", "Day 4", "Day 5", "Day 6"].includes(event.title)) {
+              continue;
+          }
+          
 
         /* if sliceMultiDayEvents is set to true, multiday events (events exceeding at least one midnight) are sliced into days,
          * otherwise, esp. in dateheaders mode it is not clear how long these events are.
@@ -712,7 +734,11 @@ Module.register("MMM-GoogleCalendar", {
       let newEvents = [];
       let lastDate = today.clone().subtract(1, "days").format("YYYYMMDD");
       let days = 0;
+      let displayedEventsCount = 0;
       for (const ev of events) {
+        if (displayedEventsCount >= 6) {
+            break;
+        }
         let eventDate = moment(ev.startDate, formatStr).format("YYYYMMDD");
         // if date of event is later than lastdate
         // check if we already are showing max unique days
@@ -733,10 +759,11 @@ Module.register("MMM-GoogleCalendar", {
           }
         }
         newEvents.push(ev);
+        displayedEventsCount++;
+
       }
       events = newEvents;
     }
-
     return events.slice(0, this.config.maximumEntries);
   },
 
@@ -751,6 +778,13 @@ Module.register("MMM-GoogleCalendar", {
     }
     return false;
   },
+  
+    notificationReceived: function(notification, payload, sender) {
+      if (notification === "REFRESH_CALENDAR") {
+       //   this.fetchCalendars();
+      }
+  },
+
 
   /**
    * Requests node helper to add calendar ID
@@ -768,6 +802,7 @@ Module.register("MMM-GoogleCalendar", {
         calendarConfig.maximumEntries || this.config.maximumEntries,
       maximumNumberOfDays:
         calendarConfig.maximumNumberOfDays || this.config.maximumNumberOfDays,
+        pastDaysCount: calendarConfig.pastDaysCount || this.config.pastDaysCount,
       fetchInterval: this.config.fetchInterval,
       symbolClass: calendarConfig.symbolClass,
       titleClass: calendarConfig.titleClass,
@@ -1032,6 +1067,7 @@ Module.register("MMM-GoogleCalendar", {
    * Broadcasts the events to all other modules for reuse.
    * The all events available in one array, sorted on startDate.
    */
+  
   broadcastEvents: function () {
     const eventList = [];
     for (const calendarID in this.calendarData) {
@@ -1044,6 +1080,7 @@ Module.register("MMM-GoogleCalendar", {
         eventList.push(event);
       }
     }
+
 
     eventList.sort(function (a, b) {
       return a.startDate - b.startDate;
